@@ -59,7 +59,7 @@ Make sure you arrange the data in the same manner below & place the .py files in
 ```
 #### Sample Usage
 ```
-python train.py --arch vgg16 --hidden_units 512 --epochs 20 --gpu
+python train.py data_dir --arch vgg16 --hidden_units 512 --epochs 20 --gpu
 ```
 ## Predicting
 #### parameters

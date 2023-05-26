@@ -6,13 +6,20 @@ from torchvision.datasets import ImageFolder
 from torch.utils.data import DataLoader
 import numpy as np
 import os
+from tqdm import tqdm
 
 def train(data_dir, lr = 0.001, arch = 'vgg16', hidden_units = 1024, optim = 'SGD', batch_size = 64,
           loss= 'cross_entropy', train_on_gpu= False, epochs = 10, save_dir = './'):
         
+    if train_on_gpu:
+        print('GPU found!')
+
     train_dir = data_dir + '/train'
     valid_dir = data_dir + '/valid'
     test_dir = data_dir + '/test'
+
+    test_exist = os.path.isdir(test_dir)
+    valid_exist = os.path.isdir(valid_dir)
     
     num_classes = len(os.listdir(train_dir))
 
@@ -29,13 +36,27 @@ def train(data_dir, lr = 0.001, arch = 'vgg16', hidden_units = 1024, optim = 'SG
                                           transforms.ToTensor(),
                                           transforms.Normalize([0.485, 0.456, 0.406],
                                                                [0.229, 0.224, 0.225])])
-    train_datasets = ImageFolder( train_dir, transform = train_transforms)
-    test_datasets = ImageFolder(test_dir, transform = test_transforms)
-    valid_datasets = ImageFolder(valid_dir, transform = test_transforms)
+    
+    train_datasets = ImageFolder(train_dir, transform = train_transforms)
+
+    # Load test dataset if it exists
+    if test_exist:
+        test_datasets = ImageFolder(test_dir, transform = test_transforms)
+        testloader = DataLoader(test_datasets, batch_size = batch_size, shuffle = True)
+        print('found test dataset')
+    else:
+        print('no test dataset found, training only...')
+
+    # Load validation dataset if it exists
+    if os.path.isdir(valid_dir):
+        valid_datasets = ImageFolder(valid_dir, transform = test_transforms)
+        validloader = DataLoader(valid_datasets, batch_size = batch_size, shuffle = True)
+        print('found valid dataset')
+    else:
+        print('no validation dataset found...')
 
     trainloader = DataLoader(train_datasets, batch_size = batch_size, shuffle = True)
-    testloader = DataLoader(test_datasets, batch_size = batch_size, shuffle = True)
-    validloader = DataLoader(valid_datasets, batch_size = batch_size, shuffle = True)
+    
 
     if arch == 'vgg16':
         from torchvision.models import vgg16   
@@ -49,8 +70,8 @@ def train(data_dir, lr = 0.001, arch = 'vgg16', hidden_units = 1024, optim = 'SG
         params = model.classifier.parameters()
         
     elif arch == 'resnet18':
-        from torchvision.models import resnet18          
-        model = resnet18(pretrained = True)
+        from torchvision.models import resnet18, ResNet18_Weights          
+        model = resnet18(weights=ResNet18_Weights.DEFAULT)
         for param in model.parameters():
             param.require_grad = False   
         params = model.parameters()
@@ -62,6 +83,9 @@ def train(data_dir, lr = 0.001, arch = 'vgg16', hidden_units = 1024, optim = 'SG
         params = model.fc.parameters()
 
     else:
+        print()
+        print('please pick one of the following archs:\n1. vgg19\n2.resnet18')
+        print()
         raise Exception('architecture not available') 
             
     if loss == 'cross_entropy':    
@@ -88,7 +112,8 @@ def train(data_dir, lr = 0.001, arch = 'vgg16', hidden_units = 1024, optim = 'SG
             valid_loss = 0
 
             model.train()
-            for data, target in trainloader:
+            train_loop = tqdm(trainloader)
+            for data, target in train_loop:
                 # move to gpu if available
                 if(train_on_gpu):
                     data, target = data.cuda(), target.cuda()
@@ -97,12 +122,24 @@ def train(data_dir, lr = 0.001, arch = 'vgg16', hidden_units = 1024, optim = 'SG
                 loss.backward()
                 optimizer.step()
                 train_loss += loss.item()*data.size(0)
-                
+
+                train_loop.set_description(f"Epoch [{epoch}/{epochs}]")
+                train_loop.set_postfix(loss=train_loss)
+            
+            if not valid_exist:
+                torch.save({'state_dict':model.state_dict(),
+                            'arch': arch,
+                            'hidden_units': hidden_units,
+                            'num_classes': num_classes},
+                            save_dir+'/trained_model.pt')
+
             # validation
             class_correct = list(0. for i in range(num_classes))
             class_total = list(0. for i in range(num_classes))            
             model.eval()
-            for data, target in validloader:
+
+            valid_loop = tqdm(validloader)
+            for data, target in (valid_loop if valid_exist else train_loop):
                 # move to gpu if available
                 if(train_on_gpu):
                     data, target = data.cuda(), target.cuda()
@@ -120,26 +157,35 @@ def train(data_dir, lr = 0.001, arch = 'vgg16', hidden_units = 1024, optim = 'SG
                     class_correct[label] += correct[i].item()
                     class_total[label] += 1
 
+                valid_loop.set_description(f"Checking validation accuracy...")
+
             # calculate average losses
             train_loss = train_loss/len(trainloader.sampler)
-            valid_loss = valid_loss/len(validloader.sampler)
+            if valid_exist:
+                valid_loss = valid_loss/len(validloader.sampler)
 
             acc = 100. * np.sum(class_correct) / np.sum(class_total)
 
             # print training/validation statistics 
-            print('Epoch: {} \tTraining Loss: {:.6f} \tValidation Loss: {:.6f}\tAccuracy: {:0.2f}%'.format(
-                epoch, train_loss, valid_loss, acc))
-            # save model if validation loss has decreased
-            if valid_loss <= valid_loss_min:
-                print('Validation loss decreased ({:.6f} --> {:.6f}).  Saving model ...'.format(
-                valid_loss_min,
-                valid_loss))
-                torch.save({'state_dict':model.state_dict(),
-                           'arch': arch,
-                           'hidden_units': hidden_units,
-                           'num_classes': num_classes},
-                           save_dir+'/trained_model.pt')
-                valid_loss_min = valid_loss
+            if valid_exist:
+                print('Epoch: {} \tTraining Loss: {:.6f} \tValidation Loss: {:.6f}\tAccuracy: {:0.2f}%'.format(
+                    epoch, train_loss, valid_loss, acc))
+            else:
+                print('Epoch: {} \tTraining Loss: {:.6f} \tAccuracy: {:0.2f}%'.format(
+                    epoch, train_loss, valid_loss, acc))
+            
+            if valid_exist:
+                # save model if validation loss has decreased
+                if valid_loss <= valid_loss_min:
+                    print('Validation loss decreased ({:.6f} --> {:.6f}).  Saving model ...'.format(
+                    valid_loss_min,
+                    valid_loss))
+                    torch.save({'state_dict':model.state_dict(),
+                            'arch': arch,
+                            'hidden_units': hidden_units,
+                            'num_classes': num_classes},
+                            save_dir+'/trained_model.pt')
+                    valid_loss_min = valid_loss
     except KeyboardInterrupt:
         print('training stopped, the last model has been saved')
         

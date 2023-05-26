@@ -25,11 +25,11 @@ results = parser.parse_args()
 
 data_dir = results.data_dir
 learning_rate = results.learning_rate
-epochs = results.epochs
+epochs = int(results.epochs)
 train_on_gpu = results.train_on_gpu
-hidden_units = results.hidden_units
+hidden_units = int(results.hidden_units)
 arch = results.arch
-batch_size = results.batch_size
+batch_size = int(results.batch_size)
 save_dir = results.save_dir
 optim = results.optim
 
